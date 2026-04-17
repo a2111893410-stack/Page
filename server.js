@@ -3,27 +3,19 @@ const http = require("http");
 const WebSocket = require("ws");
 const cors = require("cors");
 
+/**
+ * 基础配置
+ */
 const app = express();
-app.use(cors());
+app.use(cors()); // 允许前端跨域访问
 
-// 创建 HTTP 服务器
 const server = http.createServer(app);
-// 创建 WebSocket 服务器
 const wss = new WebSocket.Server({ server });
 
-/**
- * 内存存储消息列表
- * 实际项目中建议使用 Redis 或 MongoDB
- */
+// 内存存储：保存最近的消息（重启后会清空）
 let messageHistory = []; 
-const MAX_HISTORY = 1000; // 最大存储消息条数，防止内存溢出
-
-/**
- * 在线用户映射表
- * Key: userId (如 '访客-ABCDE' 或 'admin')
- * Value: WebSocket 实例
- */
-const clients = new Map();
+// 连接池：存储在线用户 userId -> ws 实例
+const clients = new Map(); 
 
 wss.on("connection", (ws) => {
     let currentId = null;
@@ -32,15 +24,16 @@ wss.on("connection", (ws) => {
         try {
             const data = JSON.parse(rawMsg);
 
+            // --- 路由逻辑 ---
             switch (data.type) {
-                // 1. 初始化连接：将用户ID与连接绑定
+                // 1. 身份注册
                 case "init":
                     currentId = data.userId;
                     clients.set(currentId, ws);
-                    console.log(`[上线] 用户: ${currentId}`);
+                    console.log(`[用户上线]: ${currentId}`);
                     break;
 
-                // 2. 获取历史记录：实现会话隔离
+                // 2. 拉取私聊历史记录
                 case "history":
                     const history = messageHistory.filter(m => 
                         (m.from === data.userId && m.to === 'admin') || 
@@ -49,7 +42,7 @@ wss.on("connection", (ws) => {
                     ws.send(JSON.stringify({ type: "history", list: history }));
                     break;
 
-                // 3. 处理转发消息（文字或图片）
+                // 3. 转发消息（文字或图片）
                 case "msg":
                 case "img":
                     const msgObj = {
@@ -57,149 +50,49 @@ wss.on("connection", (ws) => {
                         to: data.to,
                         type: data.type,
                         text: data.text || null,
-                        src: data.src || null, // 图片Base64
+                        src: data.src || null,
                         time: Date.now()
                     };
 
-                    // 存入内存历史
+                    // 存入内存记录
                     messageHistory.push(msgObj);
-                    if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
+                    if (messageHistory.length > 2000) messageHistory.shift();
 
-                    // 【核心逻辑】精准投递给接收者
-                    const receiverWs = clients.get(data.to);
-                    if (receiverWs && receiverWs.readyState === WebSocket.OPEN) {
-                        receiverWs.send(JSON.stringify(msgObj));
-                        console.log(`[转发] 从 ${data.from} 到 ${data.to}`);
+                    // 【核心转发】：发给接收者
+                    const targetWs = clients.get(data.to);
+                    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+                        targetWs.send(JSON.stringify(msgObj));
                     }
 
-                    // 【核心逻辑】发回给发送者，确保其界面立即显示
+                    // 【同步显示】：同时也发回给发送者自己
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify(msgObj));
                     }
                     break;
-
-                default:
-                    console.warn("未知消息类型:", data.type);
             }
-        } catch (err) {
-            console.error("处理消息失败:", err);
+        } catch (e) {
+            console.error("消息解析错误:", e);
         }
     });
 
-    // 处理连接断开
+    // 离线处理
     ws.on("close", () => {
         if (currentId) {
             clients.delete(currentId);
-            console.log(`[下线] 用户: ${currentId}`);
+            console.log(`[用户下线]: ${currentId}`);
         }
     });
 
-    // 错误处理
-    ws.on("error", (err) => {
-        console.error(`[连接错误] 用户 ${currentId}:`, err);
-    });
+    ws.on("error", (err) => console.log("Socket错误:", err));
 });
 
-// 定时清理（可选）：比如每小时清理一次过期内存
-setInterval(() => {
-    const fiveHoursAgo = Date.now() - (5 * 60 * 60 * 1000);
-    messageHistory = messageHistory.filter(m => m.time > fiveHoursAgo);
-}, 10 * 60 * 1000);
-
-// 健康检查接口（用于 Render 存活检查）
+// 健康检查接口：防止 Render 认为部署失败
 app.get("/", (req, res) => {
-    res.status(200).send({
-        status: "Running",
-        online_count: clients.size,
-        history_count: messageHistory.length
-    });
+    res.send({ status: "running", online: clients.size });
 });
 
-// 启动服务器
+// 端口监听：Render 必须使用 process.env.PORT
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`=================================`);
-    console.log(`后端服务已启动！`);
-    console.log(`端口: ${PORT}`);
-    console.log(`WebSocket地址: wss://你的域名:${PORT}`);
-    console.log(`=================================`);
+    console.log(`Server is active on port ${PORT}`);
 });
-
-const express = require("express");
-const http = require("http");
-const WebSocket = require("ws");
-const cors = require("cors");
-
-const app = express();
-app.use(cors());
-
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-let messageHistory = []; 
-const clients = new Map(); // 用于存储在线用户的连接
-
-wss.on("connection", (ws) => {
-    let currentId = null;
-
-    ws.on("message", (rawMsg) => {
-        try {
-            const data = JSON.parse(rawMsg);
-
-            // 1. 登录初始化
-            if (data.type === "init") {
-                currentId = data.userId;
-                clients.set(currentId, ws);
-                console.log(`[上线] ${currentId}`);
-                return;
-            }
-
-            // 2. 历史记录查询
-            if (data.type === "history") {
-                const history = messageHistory.filter(m => 
-                    (m.from === data.userId && m.to === 'admin') || 
-                    (m.from === 'admin' && m.to === data.userId)
-                );
-                ws.send(JSON.stringify({ type: "history", list: history }));
-                return;
-            }
-
-            // 3. 消息转发 (核心路由)
-            if (data.type === "msg" || data.type === "img") {
-                const msgObj = {
-                    from: data.from,
-                    to: data.to,
-                    type: data.type,
-                    text: data.text || null,
-                    src: data.src || null,
-                    time: Date.now()
-                };
-
-                messageHistory.push(msgObj);
-
-                // 转发给对方
-                const receiver = clients.get(data.to);
-                if (receiver && receiver.readyState === WebSocket.OPEN) {
-                    receiver.send(JSON.stringify(msgObj));
-                }
-
-                // 回传给自己 (让发送者即时看到)
-                ws.send(JSON.stringify(msgObj));
-            }
-        } catch (e) {
-            console.error("数据解析错误");
-        }
-    });
-
-    ws.on("close", () => {
-        if (currentId) clients.delete(currentId);
-        console.log(`[下线] ${currentId}`);
-    });
-});
-
-// 首页接口（防止 Render 关机）
-app.get("/", (req, res) => res.send({ status: "OK", online: clients.size }));
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server started on port ${PORT}`));
-
