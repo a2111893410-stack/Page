@@ -8,23 +8,45 @@ app.use(cors());
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// 关键：内存缓冲区（只存1小时内或200条）
+let msgBuffer = []; 
+const clients = new Map();
+
 wss.on("connection", (ws) => {
+    let myId = null;
+
     ws.on("message", (raw) => {
         try {
             const data = JSON.parse(raw);
-            console.log("转发消息:", data);
-            
-            // 收到任何消息，直接广播给所有连接的人
-            const msgString = JSON.stringify(data);
-            wss.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(msgString);
+
+            // 1. 初始化：拉取属于自己的私有历史
+            if (data.type === "init") {
+                myId = data.userId;
+                clients.set(myId, ws);
+                
+                // 只把跟“我”相关的历史发回来
+                const myHistory = msgBuffer.filter(m => m.from === myId || m.to === myId);
+                ws.send(JSON.stringify({ type: "history", list: myHistory }));
+                return;
+            }
+
+            // 2. 消息转发：严格私聊
+            if (data.type === "msg") {
+                const msgObj = { ...data, time: Date.now() };
+                msgBuffer.push(msgObj);
+                if(msgBuffer.length > 300) msgBuffer.shift(); // 限制内存
+
+                // 精准投递：只发给接收者和发送者自己
+                const targetWs = clients.get(data.to);
+                if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+                    targetWs.send(JSON.stringify(msgObj));
                 }
-            });
-        } catch (e) { console.error("解析失败"); }
+                ws.send(JSON.stringify(msgObj)); 
+            }
+        } catch (e) {}
     });
+
+    ws.on("close", () => { if (myId) clients.delete(myId); });
 });
 
-app.get("/", (req, res) => res.send({ status: "running", online: wss.clients.size }));
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log("Server Active"));
+server.listen(process.env.PORT || 3000);
