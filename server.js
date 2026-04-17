@@ -50,3 +50,42 @@ wss.on("connection", (ws) => {
 });
 
 server.listen(process.env.PORT || 3000);
+
+// 1. 初始化时，先渲染本地缓存，再连接Socket拉取最新的
+let myId = localStorage.getItem('chat_uid') || 'U' + Math.random().toString(36).substr(2,5);
+localStorage.setItem('chat_uid', myId);
+
+// 恢复本地快照（即便没网，以前聊的也得在）
+const localData = JSON.parse(localStorage.getItem('chat_records_' + myId) || '[]');
+localData.forEach(m => renderMsg(m));
+
+const socket = new WebSocket('wss://page-c4hm.onrender.com');
+
+socket.onopen = () => {
+    socket.send(JSON.stringify({ type: "init", userId: myId }));
+};
+
+socket.onmessage = (e) => {
+    const res = JSON.parse(e.data);
+
+    // 情况A：收到的是历史同步包（用来填补断网期间的空缺）
+    if (res.type === "history") {
+        // 合并去重并更新本地存储
+        localStorage.setItem('chat_records_' + myId, JSON.stringify(res.list));
+        refreshUI(res.list);
+        return;
+    }
+
+    // 情况B：收到的是实时私聊
+    if (res.from === myId || res.to === myId) {
+        renderMsg(res);
+        saveToLocal(res);
+    }
+};
+
+function saveToLocal(msg) {
+    let history = JSON.parse(localStorage.getItem('chat_records_' + myId) || '[]');
+    history.push(msg);
+    localStorage.setItem('chat_records_' + myId, JSON.stringify(history.slice(-50)));
+}
+
