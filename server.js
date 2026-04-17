@@ -10,12 +10,13 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 /* =========================
-   消息存储（5小时自动清理）
+   消息存储（5小时）
 ========================= */
-let messages = []; 
-const SAVE_TIME = 5 * 60 * 60 * 1000; // 5小时
+let messages = [];
 
-function cleanOldMessages(){
+const SAVE_TIME = 5 * 60 * 60 * 1000;
+
+function cleanOldMessages() {
   const now = Date.now();
   messages = messages.filter(m => now - m.time < SAVE_TIME);
 }
@@ -24,41 +25,54 @@ setInterval(cleanOldMessages, 60 * 1000);
 /* =========================
    连接池
 ========================= */
-const clients = new Map(); // userId -> ws
-const admins = new Set();  // 管理员ws集合
+const clients = new Map();   // userId -> ws
+const admins = new Set();    // admin ws
 
 /* =========================
-   WebSocket 核心
+   WebSocket
 ========================= */
 wss.on("connection", (ws) => {
-
   let userId = null;
+  let isAdmin = false;
 
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
+    let data;
+    try {
+      data = JSON.parse(msg);
+    } catch (e) {
+      return;
+    }
 
-    /* ===== 初始化 ===== */
+    /* ===== INIT ===== */
     if (data.type === "init") {
       userId = data.userId;
+      isAdmin = data.role === "admin";
 
       clients.set(userId, ws);
 
-      // 标记管理员
-      if (data.role === "admin") {
+      if (isAdmin) {
         admins.add(ws);
-        console.log("管理员已上线:", userId);
+        console.log("🟢 管理员上线:", userId);
       } else {
-        console.log("用户上线:", userId);
+        console.log("👤 用户上线:", userId);
       }
 
       return;
     }
 
-    /* ===== 历史记录 ===== */
+    /* ===== 用户历史 ===== */
     if (data.type === "history") {
-      const history = messages.filter(m =>
-        m.from === data.userId || m.to === data.userId
-      );
+      let history;
+
+      if (data.role === "admin") {
+        // 管理员：看全部
+        history = messages;
+      } else {
+        // 用户：只看自己的
+        history = messages.filter(m =>
+          m.from === data.userId || m.to === data.userId
+        );
+      }
 
       ws.send(JSON.stringify({
         type: "history",
@@ -72,7 +86,6 @@ wss.on("connection", (ws) => {
        文本消息
     ========================= */
     if (data.type === "msg") {
-
       const msgObj = {
         from: data.from,
         to: data.to,
@@ -83,13 +96,8 @@ wss.on("connection", (ws) => {
 
       messages.push(msgObj);
 
-      // 发给目标用户
       sendToUser(data.to, msgObj);
-
-      // 发回发送者（保证双方同步）
       sendToUser(data.from, msgObj);
-
-      // ⭐ 关键：发给所有管理员
       broadcastToAdmins(msgObj);
 
       return;
@@ -99,7 +107,6 @@ wss.on("connection", (ws) => {
        图片消息
     ========================= */
     if (data.type === "img") {
-
       const msgObj = {
         from: data.from,
         to: data.to,
@@ -112,8 +119,6 @@ wss.on("connection", (ws) => {
 
       sendToUser(data.to, msgObj);
       sendToUser(data.from, msgObj);
-
-      // ⭐ 管理员也能看到图片
       broadcastToAdmins(msgObj);
 
       return;
@@ -122,7 +127,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     if (userId) clients.delete(userId);
-    admins.delete(ws);
+    if (isAdmin) admins.delete(ws);
   });
 });
 
@@ -137,7 +142,7 @@ function sendToUser(userId, data) {
 }
 
 /* =========================
-   广播给管理员
+   管理员广播
 ========================= */
 function broadcastToAdmins(data) {
   admins.forEach(ws => {
@@ -148,7 +153,7 @@ function broadcastToAdmins(data) {
 }
 
 /* =========================
-   HTTP 测试
+   HTTP
 ========================= */
 app.get("/", (req, res) => {
   res.send("Chat server running");
