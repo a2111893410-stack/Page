@@ -5,87 +5,94 @@ const cors = require("cors");
 
 const app = express();
 app.use(cors());
+
+// 创建服务器
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// 关键：内存缓冲区（只存1小时内或200条）
-let msgBuffer = []; 
-const clients = new Map();
+/**
+ * 核心存储
+ * messageBuffer: 存储最近的消息，解决一小时内刷新消失问题
+ * clients: 存储在线连接，解决消息互通（精准私聊）问题
+ */
+let messageBuffer = []; 
+const clients = new Map(); // Map<userId, ws_connection>
 
 wss.on("connection", (ws) => {
-    let myId = null;
+    let currentUserId = null;
 
     ws.on("message", (raw) => {
         try {
             const data = JSON.parse(raw);
 
-            // 1. 初始化：拉取属于自己的私有历史
+            // 1. 初始化/断线重连逻辑
             if (data.type === "init") {
-                myId = data.userId;
-                clients.set(myId, ws);
-                
-                // 只把跟“我”相关的历史发回来
-                const myHistory = msgBuffer.filter(m => m.from === myId || m.to === myId);
+                currentUserId = data.userId;
+                clients.set(currentUserId, ws);
+                console.log(`[上线] ID: ${currentUserId}`);
+
+                // 【关键】从缓冲区中提取属于这个人的历史记录，发回给前端
+                const myHistory = messageBuffer.filter(m => 
+                    m.from === currentUserId || m.to === currentUserId
+                );
                 ws.send(JSON.stringify({ type: "history", list: myHistory }));
                 return;
             }
 
-            // 2. 消息转发：严格私聊
-            if (data.type === "msg") {
-                const msgObj = { ...data, time: Date.now() };
-                msgBuffer.push(msgObj);
-                if(msgBuffer.length > 300) msgBuffer.shift(); // 限制内存
+            // 2. 消息转发逻辑
+            if (data.type === "msg" || data.type === "img") {
+                const msgObj = {
+                    from: data.from,
+                    to: data.to,
+                    type: data.type,
+                    text: data.text || null,
+                    src: data.src || null,
+                    time: Date.now()
+                };
 
-                // 精准投递：只发给接收者和发送者自己
+                // 存入缓冲区（限制300条，防止内存溢出）
+                messageBuffer.push(msgObj);
+                if (messageBuffer.length > 300) messageBuffer.shift();
+
+                // 【核心修改】精准投递，不再广播
+                // 发给接收者
                 const targetWs = clients.get(data.to);
                 if (targetWs && targetWs.readyState === WebSocket.OPEN) {
                     targetWs.send(JSON.stringify(msgObj));
                 }
-                ws.send(JSON.stringify(msgObj)); 
+                
+                // 同时也发给自己，确保发送端也能实时看到
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(msgObj));
+                }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error("解析消息失败:", e);
+        }
     });
 
-    ws.on("close", () => { if (myId) clients.delete(myId); });
+    // 连接断开处理
+    ws.on("close", () => {
+        if (currentUserId) {
+            clients.delete(currentUserId);
+            console.log(`[下线] ID: ${currentUserId}`);
+        }
+    });
+
+    ws.on("error", (err) => console.log("Socket错误:", err));
 });
 
-server.listen(process.env.PORT || 3000);
+// Render 健康检查接口
+app.get("/", (req, res) => {
+    res.send({ 
+        status: "running", 
+        onlineCount: clients.size, 
+        bufferCount: messageBuffer.length 
+    });
+});
 
-// 1. 初始化时，先渲染本地缓存，再连接Socket拉取最新的
-let myId = localStorage.getItem('chat_uid') || 'U' + Math.random().toString(36).substr(2,5);
-localStorage.setItem('chat_uid', myId);
-
-// 恢复本地快照（即便没网，以前聊的也得在）
-const localData = JSON.parse(localStorage.getItem('chat_records_' + myId) || '[]');
-localData.forEach(m => renderMsg(m));
-
-const socket = new WebSocket('wss://page-c4hm.onrender.com');
-
-socket.onopen = () => {
-    socket.send(JSON.stringify({ type: "init", userId: myId }));
-};
-
-socket.onmessage = (e) => {
-    const res = JSON.parse(e.data);
-
-    // 情况A：收到的是历史同步包（用来填补断网期间的空缺）
-    if (res.type === "history") {
-        // 合并去重并更新本地存储
-        localStorage.setItem('chat_records_' + myId, JSON.stringify(res.list));
-        refreshUI(res.list);
-        return;
-    }
-
-    // 情况B：收到的是实时私聊
-    if (res.from === myId || res.to === myId) {
-        renderMsg(res);
-        saveToLocal(res);
-    }
-};
-
-function saveToLocal(msg) {
-    let history = JSON.parse(localStorage.getItem('chat_records_' + myId) || '[]');
-    history.push(msg);
-    localStorage.setItem('chat_records_' + myId, JSON.stringify(history.slice(-50)));
-}
-
+// 启动
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`聊天服务器已启动，端口: ${PORT}`);
+});
