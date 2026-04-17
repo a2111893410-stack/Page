@@ -124,3 +124,82 @@ server.listen(PORT, () => {
     console.log(`WebSocket地址: wss://你的域名:${PORT}`);
     console.log(`=================================`);
 });
+
+const express = require("express");
+const http = require("http");
+const WebSocket = require("ws");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+let messageHistory = []; 
+const clients = new Map(); // 用于存储在线用户的连接
+
+wss.on("connection", (ws) => {
+    let currentId = null;
+
+    ws.on("message", (rawMsg) => {
+        try {
+            const data = JSON.parse(rawMsg);
+
+            // 1. 登录初始化
+            if (data.type === "init") {
+                currentId = data.userId;
+                clients.set(currentId, ws);
+                console.log(`[上线] ${currentId}`);
+                return;
+            }
+
+            // 2. 历史记录查询
+            if (data.type === "history") {
+                const history = messageHistory.filter(m => 
+                    (m.from === data.userId && m.to === 'admin') || 
+                    (m.from === 'admin' && m.to === data.userId)
+                );
+                ws.send(JSON.stringify({ type: "history", list: history }));
+                return;
+            }
+
+            // 3. 消息转发 (核心路由)
+            if (data.type === "msg" || data.type === "img") {
+                const msgObj = {
+                    from: data.from,
+                    to: data.to,
+                    type: data.type,
+                    text: data.text || null,
+                    src: data.src || null,
+                    time: Date.now()
+                };
+
+                messageHistory.push(msgObj);
+
+                // 转发给对方
+                const receiver = clients.get(data.to);
+                if (receiver && receiver.readyState === WebSocket.OPEN) {
+                    receiver.send(JSON.stringify(msgObj));
+                }
+
+                // 回传给自己 (让发送者即时看到)
+                ws.send(JSON.stringify(msgObj));
+            }
+        } catch (e) {
+            console.error("数据解析错误");
+        }
+    });
+
+    ws.on("close", () => {
+        if (currentId) clients.delete(currentId);
+        console.log(`[下线] ${currentId}`);
+    });
+});
+
+// 首页接口（防止 Render 关机）
+app.get("/", (req, res) => res.send({ status: "OK", online: clients.size }));
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server started on port ${PORT}`));
+
