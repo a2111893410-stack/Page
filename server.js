@@ -9,139 +9,79 @@ app.use(cors());
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-/* =========================
-   消息池（5小时）
-========================= */
-let messages = [];
-const SAVE_TIME = 5 * 60 * 60 * 1000;
+let messages = []; 
+const SAVE_TIME = 5 * 60 * 60 * 1000; 
 
-setInterval(() => {
-  const now = Date.now();
-  messages = messages.filter(m => now - m.time < SAVE_TIME);
-}, 60 * 1000);
+function cleanOldMessages() {
+    const now = Date.now();
+    messages = messages.filter(m => now - m.time < SAVE_TIME);
+}
+setInterval(cleanOldMessages, 60 * 1000);
 
-/* =========================
-   连接池
-========================= */
-const clients = new Map(); // userId -> ws
-const rooms = new Map();   // roomId -> Set(ws)
-const admins = new Set();  // admin ws
+// 用户连接池
+const clients = new Map(); 
 
-/* =========================
-   核心
-========================= */
 wss.on("connection", (ws) => {
+    let currentUserId = null;
 
-  let userId = null;
-  let roomId = null;
-  let isAdmin = false;
+    ws.on("message", (msg) => {
+        try {
+            const data = JSON.parse(msg);
 
-  ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
+            // 1. 初始化
+            if (data.type === "init") {
+                currentUserId = data.userId;
+                clients.set(currentUserId, ws);
+                console.log(`User Logged: ${currentUserId}`);
+                return;
+            }
 
-    /* ===== 连接 ===== */
-    if (data.type === "join") {
-      userId = data.userId;
-      roomId = data.roomId;
+            // 2. 历史记录 (严格隔离)
+            if (data.type === "history") {
+                const history = messages.filter(m =>
+                    (m.from === data.userId && m.to === 'admin') || 
+                    (m.from === 'admin' && m.to === data.userId)
+                );
+                ws.send(JSON.stringify({ type: "history", list: history }));
+                return;
+            }
 
-      clients.set(userId, ws);
+            // 3. 转发消息 (文本和图片)
+            if (data.type === "msg" || data.type === "img") {
+                const msgObj = {
+                    from: data.from,
+                    to: data.to,
+                    type: data.type,
+                    text: data.text || null,
+                    src: data.src || null,
+                    time: Date.now()
+                };
 
-      if (data.role === "admin") {
-        isAdmin = true;
-        admins.add(ws);
-      }
+                messages.push(msgObj);
 
-      if (!rooms.has(roomId)) {
-        rooms.set(roomId, new Set());
-      }
-      rooms.get(roomId).add(ws);
+                // 发送给接收者
+                sendToUser(data.to, msgObj);
+                // 发送回发送者（解决实时显示问题）
+                sendToUser(data.from, msgObj);
+            }
+        } catch (e) {
+            console.error("Msg Error");
+        }
+    });
 
-      console.log("JOIN:", userId, roomId);
-      return;
-    }
-
-    /* ===== 历史 ===== */
-    if (data.type === "history") {
-      const history = messages.filter(m => m.roomId === data.roomId);
-
-      ws.send(JSON.stringify({
-        type: "history",
-        list: history
-      }));
-      return;
-    }
-
-    /* ===== 文本 ===== */
-    if (data.type === "msg") {
-      const msgObj = {
-        type: "msg",
-        from: data.from,
-        roomId: data.roomId,
-        text: data.text,
-        time: Date.now()
-      };
-
-      messages.push(msgObj);
-
-      broadcastRoom(data.roomId, msgObj);
-      return;
-    }
-
-    /* ===== 图片 ===== */
-    if (data.type === "img") {
-      const msgObj = {
-        type: "img",
-        from: data.from,
-        roomId: data.roomId,
-        src: data.src,
-        time: Date.now()
-      };
-
-      messages.push(msgObj);
-
-      broadcastRoom(data.roomId, msgObj);
-      return;
-    }
-  });
-
-  ws.on("close", () => {
-    if (userId) clients.delete(userId);
-    if (isAdmin) admins.delete(ws);
-    if (roomId && rooms.has(roomId)) {
-      rooms.get(roomId).delete(ws);
-    }
-  });
+    ws.on("close", () => {
+        if (currentUserId) clients.delete(currentUserId);
+    });
 });
 
-/* =========================
-   房间广播（核心）
-========================= */
-function broadcastRoom(roomId, data) {
-  const room = rooms.get(roomId);
-  if (!room) return;
-
-  room.forEach(ws => {
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify(data));
+function sendToUser(userId, data) {
+    const ws = clients.get(userId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
     }
-  });
-
-  // 管理员也收
-  admins.forEach(ws => {
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify(data));
-    }
-  });
 }
 
-/* =========================
-   HTTP
-========================= */
-app.get("/", (req, res) => {
-  res.send("Chat OK");
-});
+app.get("/", (req, res) => res.send("Server Active"));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log("RUN:", PORT);
-});
+server.listen(PORT, () => console.log("Running..."));
