@@ -1,45 +1,47 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
-const cors = require("cors");
 
 const app = express();
-app.use(cors());
+// 基础路由，用于检查服务是否存活
+app.get("/", (req, res) => res.send("Chat Server is Online"));
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-let messageBuffer = []; 
+let history = [];
 
 wss.on("connection", (ws) => {
-    console.log("新连接已建立");
-    // 连接时同步历史
-    ws.send(JSON.stringify({ type: "history", list: messageBuffer }));
+    console.log("New Connection established");
+    
+    // 连上后立即同步历史
+    ws.send(JSON.stringify({ type: "history", data: history }));
 
-    ws.on("message", (raw) => {
+    ws.on("message", (message) => {
         try {
-            const data = JSON.parse(raw);
-            if (data.type === "msg") {
-                const msgObj = { 
-                    ...data, 
-                    msgId: 'ID-' + Date.now() + Math.random().toString(36).substr(2, 4) 
+            const parsed = JSON.parse(message);
+            if (parsed.type === "msg") {
+                const packet = {
+                    ...parsed,
+                    id: Date.now() + Math.random().toString(16).slice(2, 6)
                 };
-                messageBuffer.push(msgObj);
-                if (messageBuffer.length > 300) messageBuffer.shift();
+                history.push(packet);
+                if (history.length > 200) history.shift();
 
-                console.log(`广播消息: 从 ${data.from} 发往 ${data.to}: ${data.text}`);
-
-                // 全量广播给所有人
+                // 暴力广播给所有人
                 wss.clients.forEach(client => {
                     if (client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify(msgObj));
+                        client.send(JSON.stringify(packet));
                     }
                 });
             }
-        } catch (e) {
-            console.log("解析失败");
+        } catch (err) {
+            console.error("Payload error:", err);
         }
     });
+
+    ws.on("error", (err) => console.error("Socket error:", err));
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log("Server is running..."));
+server.listen(PORT, () => console.log(`Listening on ${PORT}`));
