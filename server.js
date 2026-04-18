@@ -8,60 +8,43 @@ app.use(cors());
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// 内存缓冲区：重启前记录所有聊天
 let messageBuffer = []; 
-const clients = new Map(); 
 
 wss.on("connection", (ws) => {
-    let currentId = null;
+    // 1. 只要有人连上来，立刻把所有历史记录同步过去
+    ws.send(JSON.stringify({ type: "history", list: messageBuffer }));
 
     ws.on("message", (raw) => {
         try {
             const data = JSON.parse(raw);
-
-            if (data.type === "init") {
-                currentId = data.userId.trim(); // 去空格
-                clients.set(currentId, ws);
-                const myHistory = messageBuffer.filter(m => m.from === currentId || m.to === currentId);
-                ws.send(JSON.stringify({ type: "history", list: myHistory }));
-                return;
-            }
-
+            
+            // 2. 只处理消息类型
             if (data.type === "msg") {
                 const msgObj = { 
                     ...data, 
-                    msgId: 'M' + Date.now() + Math.random().toString(16).slice(2,5)
+                    msgId: 'ID-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5) 
                 };
+
+                // 存入历史（最多500条）
                 messageBuffer.push(msgObj);
-                if (messageBuffer.length > 300) messageBuffer.shift();
+                if (messageBuffer.length > 500) messageBuffer.shift();
 
-                // 策略：先尝试精准推送
-                let delivered = false;
-                const targetWs = clients.get(data.to);
-                if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-                    targetWs.send(JSON.stringify(msgObj));
-                    delivered = true;
-                }
-
-                // 保底策略：如果精准推送没成功，或者发给访客的消息，直接全量广播
-                // 让前端自己根据 to 字段识别
-                if (!delivered || data.from === "admin") {
-                    wss.clients.forEach(client => {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify(msgObj));
-                        }
-                    });
-                } else {
-                    // 确保发送者自己能收到回显
-                    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msgObj));
-                }
+                // 3. 全局广播：不挑人，发给当前所有在线的 WebSocket 客户端
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify(msgObj));
+                    }
+                });
             }
-        } catch (e) {}
-    });
-
-    ws.on("close", () => {
-        if (currentId) clients.delete(currentId);
+        } catch (e) {
+            console.error("解析失败");
+        }
     });
 });
 
+// 健康检查
+app.get("/", (req, res) => res.send({ status: "active", buffer: messageBuffer.length }));
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log("System Running"));
+server.listen(PORT, () => console.log(`Mirror Server on ${PORT}`));
