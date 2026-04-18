@@ -5,64 +5,72 @@ const cors = require("cors");
 
 const app = express();
 app.use(cors());
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// 内存缓冲区（重启会清空，但只要不重启，一小时内消息都在）
 let messageBuffer = []; 
 const clients = new Map(); 
 
 wss.on("connection", (ws) => {
-    let currentId = null;
+    let currentUserId = null;
 
-    ws.on("message", (raw) => {
+    ws.on("message", (message) => {
         try {
-            const data = JSON.parse(raw);
-
+            const data = JSON.parse(message);
+            
+            // 路由 A: 初始化身份
             if (data.type === "init") {
-                currentId = data.userId;
-                // 强行覆盖旧连接，确保最新
-                clients.set(currentId, ws);
-                const myHistory = messageBuffer.filter(m => m.from === currentId || m.to === currentId);
-                ws.send(JSON.stringify({ type: "history", list: myHistory }));
+                currentUserId = data.userId;
+                clients.set(currentUserId, ws);
+                console.log(`[用户登录] ID: ${currentUserId}`);
+                
+                // 将缓冲区中属于该用户的历史同步回去
+                const history = messageBuffer.filter(m => m.from === currentUserId || m.to === currentUserId);
+                ws.send(JSON.stringify({ type: "history", list: history }));
                 return;
             }
 
+            // 路由 B: 转发私聊消息
             if (data.type === "msg") {
-                // 生成唯一消息ID，解决重复显示问题
-                const msgObj = { 
-                    ...data, 
-                    id: Date.now() + Math.random().toString(16).slice(2, 8) 
+                const msgObj = {
+                    ...data,
+                    msgId: Date.now() + Math.random().toString(16).slice(2, 8),
+                    time: new Date().toLocaleTimeString()
                 };
-                
+
+                // 存入缓冲区
                 messageBuffer.push(msgObj);
                 if (messageBuffer.length > 500) messageBuffer.shift();
 
-                // 发送给目标
-                const targetWs = clients.get(data.to);
-                if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-                    targetWs.send(JSON.stringify(msgObj));
+                // 【核心：双向投递】
+                // 1. 发给目标人
+                const target = clients.get(data.to);
+                if (target && target.readyState === WebSocket.OPEN) {
+                    target.send(JSON.stringify(msgObj));
+                    console.log(`[转发成功] 从 ${data.from} 到 ${data.to}`);
+                } else {
+                    console.log(`[转发失败] 目标 ${data.to} 不在线`);
                 }
-                // 发送给自己（回显）
+
+                // 2. 发回给发送者（用于回显）
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify(msgObj));
                 }
             }
-        } catch (e) { console.error("Data error"); }
+        } catch (err) {
+            console.error("解析错误");
+        }
     });
 
     ws.on("close", () => {
-        if (currentId && clients.get(currentId) === ws) {
-            clients.delete(currentId);
-        }
+        if (currentUserId) clients.delete(currentUserId);
     });
 });
 
-// 每30秒发一次心跳，防止Render关掉连接
-setInterval(() => {
-    wss.clients.forEach(ws => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:"ping"}));
-    });
-}, 30000);
+// 健康检查与保活
+app.get("/", (req, res) => res.send({ status: "running", online: clients.size }));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running`));
+server.listen(PORT, () => console.log(`Server started on port ${PORT}`));
