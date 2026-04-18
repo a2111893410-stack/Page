@@ -8,29 +8,27 @@ app.use(cors());
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// 内存缓冲区：重启前记录所有聊天
 let messageBuffer = []; 
 
 wss.on("connection", (ws) => {
-    // 1. 只要有人连上来，立刻把所有历史记录同步过去
+    console.log("新连接已建立");
+    // 连接时同步历史
     ws.send(JSON.stringify({ type: "history", list: messageBuffer }));
 
     ws.on("message", (raw) => {
         try {
             const data = JSON.parse(raw);
-            
-            // 2. 只处理消息类型
             if (data.type === "msg") {
                 const msgObj = { 
                     ...data, 
-                    msgId: 'ID-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5) 
+                    msgId: 'ID-' + Date.now() + Math.random().toString(36).substr(2, 4) 
                 };
-
-                // 存入历史（最多500条）
                 messageBuffer.push(msgObj);
-                if (messageBuffer.length > 500) messageBuffer.shift();
+                if (messageBuffer.length > 300) messageBuffer.shift();
 
-                // 3. 全局广播：不挑人，发给当前所有在线的 WebSocket 客户端
+                console.log(`广播消息: 从 ${data.from} 发往 ${data.to}: ${data.text}`);
+
+                // 全量广播给所有人
                 wss.clients.forEach(client => {
                     if (client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify(msgObj));
@@ -38,13 +36,10 @@ wss.on("connection", (ws) => {
                 });
             }
         } catch (e) {
-            console.error("解析失败");
+            console.log("解析失败");
         }
     });
 });
 
-// 健康检查
-app.get("/", (req, res) => res.send({ status: "active", buffer: messageBuffer.length }));
-
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Mirror Server on ${PORT}`));
+server.listen(PORT, () => console.log("Server is running..."));
