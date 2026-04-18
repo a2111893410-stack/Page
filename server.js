@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
+const https = require("https"); // 新增：用于发送 Bark 推送请求
 
 const app = express();
 app.get("/", (req, res) => res.send("Pro Chat Server is Running"));
@@ -13,23 +14,22 @@ const wss = new WebSocket.Server({
     maxPayload: 10 * 1024 * 1024 // 设置最大传输限制为 10MB
 });
 
+// --- 配置区 ---
+const BARK_KEY = "a7TwmrfWu7jK2ASRxkiXDB"; // 你的 Bark 密钥
+const ADMIN_URL = "https://ml-theta-three.vercel.app/admin.html"; // 你的客服端地址
 let history = []; // 存储最近 100 条消息
 
 wss.on("connection", (ws) => {
-    // --- 1. 初始化连接 ---
     ws.isAlive = true;
     console.log("新客户端已连接");
 
-    // --- 2. 立即同步历史记录 ---
-    // 访客端重连后会自动收到之前没看到的旧消息
+    // 立即同步历史记录
     ws.send(JSON.stringify({ type: "history", data: history }));
 
-    // --- 3. 处理心跳响应 (Pong) ---
     ws.on('pong', () => {
         ws.isAlive = true;
     });
 
-    // --- 4. 接收并转发消息 ---
     ws.on("message", (raw) => {
         try {
             const data = JSON.parse(raw);
@@ -38,17 +38,23 @@ wss.on("connection", (ws) => {
             const packet = {
                 from: String(data.from).toLowerCase().trim(),
                 to: String(data.to).toLowerCase().trim(),
-                text: data.text,        // 文本内容或图片的 Base64 编码
-                type: data.type || 'text', // text 或 img
+                text: data.text,        
+                type: data.type || 'text', 
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 id: 'msg_' + Date.now() + Math.random().toString(36).substr(2, 4)
             };
 
             // 存入历史记录
             history.push(packet);
-            if (history.length > 100) history.shift(); // 保持最近 100 条
+            if (history.length > 100) history.shift();
 
             console.log(`[转发] ${packet.from} -> ${packet.to} (${packet.type})`);
+
+            // --- 核心：Bark 消息推送逻辑 ---
+            // 只有发给 admin 的消息才推送，避免循环提醒
+            if (packet.to === "admin" && packet.from !== "admin") {
+                sendBarkNotification(packet);
+            }
 
             // 广播给所有在线客户端
             wss.clients.forEach(client => {
@@ -66,8 +72,31 @@ wss.on("connection", (ws) => {
     });
 });
 
-// --- 5. 心跳检测逻辑 (解决不刷新网页就收不到信息的问题) ---
-// 每 30 秒向所有客户端发送 Ping，如果没收到 Pong，则强制断开并触发前端的 onclose 自动重连
+/**
+ * 发送 Bark 推送函数
+ */
+function sendBarkNotification(packet) {
+    const title = encodeURIComponent("客服系统有新消息");
+    // 如果是图片，通知显示 [图片]，否则显示具体文本（截取前50字）
+    const content = packet.type === 'img' ? '[图片消息]' : packet.text.substring(0, 50);
+    const body = encodeURIComponent(content);
+    
+    // 构造 Bark 完整 URL
+    // url 参数确保点击通知后直接打开你的 Vercel 客服端
+    // group 参数将通知分类为“客服”
+    // icon 参数设置一个绿色的客服小图标
+    const barkUrl = `https://api.day.app/${BARK_KEY}/${title}/${body}?url=${encodeURIComponent(ADMIN_URL)}&group=客服&icon=https://dummyimage.com/100/07c160/fff&text=CS`;
+
+    https.get(barkUrl, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => { console.log('Bark 推送成功响应:', data); });
+    }).on('error', (err) => {
+        console.error('Bark 推送失败:', err.message);
+    });
+}
+
+// --- 心跳检测逻辑 ---
 const interval = setInterval(() => {
     wss.clients.forEach(ws => {
         if (ws.isAlive === false) return ws.terminate();
@@ -80,11 +109,10 @@ wss.on('close', () => {
     clearInterval(interval);
 });
 
-// --- 6. 启动服务器 ---
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`====================================`);
     console.log(`服务端启动成功！端口：${PORT}`);
-    console.log(`WebSocket 地址: wss://你的域名/`);
+    console.log(`Bark 推送已配置，目标：${BARK_KEY}`);
     console.log(`====================================`);
 });
