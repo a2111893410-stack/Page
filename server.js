@@ -61,7 +61,7 @@ wss.on("connection", (ws) => {
                     const autoReply = {
                         from: "admin",
                         to: packet.from,
-                        text: "看片群20元永久看，上万部资源，小学初中高中，萝莉御姐熟女等等所有类型都有，每天更新，要进群吗？",
+                        text: "您好，请问有什么可以帮到您的吗？",
                         type: "text",
                         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         id: 'auto_' + Date.now()
@@ -72,7 +72,7 @@ wss.on("connection", (ws) => {
                             client.send(JSON.stringify({ type: "new", data: autoReply }));
                         }
                     });
-                }, 5000); 
+                }, 3000); 
             }
 
             // 脱敏推送
