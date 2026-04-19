@@ -8,17 +8,18 @@ app.get("/", (req, res) => res.send("Pro Chat Server (Private Mode) is Running")
 
 const server = http.createServer(app);
 
-// 增加消息体限制，防止 Base64 图片过大导致崩溃
 const wss = new WebSocket.Server({ 
     server,
-    maxPayload: 10 * 1024 * 1024 // 10MB
+    maxPayload: 10 * 1024 * 1024 
 });
 
 // --- 配置区 ---
-// 建议：在 Render 后台设置名为 BARK_KEY 的环境变量，更安全
 const BARK_KEY = process.env.BARK_KEY || "a7TwmrfWu7jK2ASRxkiXDB"; 
 const ADMIN_URL = "https://ml-theta-three.vercel.app/admin.html"; 
 let history = []; 
+
+// 【新增】用于记录哪些客户已经发过消息了（存放在内存中）
+const knownUsers = new Set(); 
 
 wss.on("connection", (ws) => {
     ws.isAlive = true;
@@ -46,9 +47,37 @@ wss.on("connection", (ws) => {
 
             console.log(`[转发] ${packet.from} -> ${packet.to} (${packet.type})`);
 
-            // --- 核心修改：脱敏推送 ---
+            // --- 自动回复逻辑 ---
+            // 条件：不是 admin 发的，且不在 knownUsers 列表中
+            if (packet.from !== "admin" && !knownUsers.has(packet.from)) {
+                knownUsers.add(packet.from); // 标记该用户已经来过了
+                
+                // 延迟 1 秒发送自动回复，体验更自然
+                setTimeout(() => {
+                    const autoReplyPacket = {
+                        from: "admin",
+                        to: packet.from,
+                        text: "您好，请问有什么可以帮到您的吗？",
+                        type: "text",
+                        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        id: 'auto_' + Date.now()
+                    };
+
+                    history.push(autoReplyPacket);
+                    if (history.length > 100) history.shift();
+
+                    // 广播给所有人（客服端和当前客户端都能收到）
+                    wss.clients.forEach(client => {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify({ type: "new", data: autoReplyPacket }));
+                        }
+                    });
+                }, 1000); 
+            }
+
+            // --- 脱敏推送 ---
             if (packet.to === "admin" && packet.from !== "admin") {
-                sendBarkNotification(); // 不再传递 packet，确保推送内容固定
+                sendBarkNotification(); 
             }
 
             wss.clients.forEach(client => {
@@ -69,14 +98,11 @@ wss.on("connection", (ws) => {
  */
 function sendBarkNotification() {
     const title = encodeURIComponent("新咨询提醒");
-    // 固定字符串，不包含任何聊天原文
     const body = encodeURIComponent("收到来自客户的新消息，请查看");
-    
-    // 构造 Bark URL
     const barkUrl = `https://api.day.app/${BARK_KEY}/${title}/${body}?url=${encodeURIComponent(ADMIN_URL)}&group=客服&icon=https://dummyimage.com/100/07c160/fff&text=CS`;
 
     https.get(barkUrl, (res) => {
-        res.on('data', () => {}); // 消耗数据流
+        res.on('data', () => {}); 
         res.on('end', () => { console.log('脱敏推送已发送'); });
     }).on('error', (err) => {
         console.error('Bark 推送失败:', err.message);
@@ -97,7 +123,6 @@ wss.on('close', () => { clearInterval(interval); });
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`====================================`);
-    console.log(`脱敏版服务端启动成功！`);
-    console.log(`隐私保护状态：已开启 (Bark 不处理消息原文)`);
+    console.log(`脱敏版服务端启动成功 (含自动回复功能)`);
     console.log(`====================================`);
 });
