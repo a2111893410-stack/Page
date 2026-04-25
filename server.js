@@ -57,7 +57,7 @@ wss.on("connection", (ws) => {
                     const autoReplyPacket = {
                         from: "admin",
                         to: packet.from,
-                        text: "看片群20元永久看，上万部资源，小学初中高中，萝莉御姐熟女等等所有类型都有，每天更新，要进群吗",
+                        text: "您好，开通会员20元/永久，解锁网页版/APP版全部视频内容，解锁全部功能，请问您是否需要开通会员？",
                         type: "text",
                         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         id: 'auto_' + Date.now()
