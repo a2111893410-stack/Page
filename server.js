@@ -57,7 +57,7 @@ wss.on("connection", (ws) => {
                     const autoReplyPacket = {
                         from: "admin",
                         to: packet.from,
-                        text: "你好，20元开通永久会员，网页版/APP版，请问是否需要开通会员？",
+                        text: "你好，20元开通永久会员，网页版/APP版，请问是否需要开通会员",
                         type: "text",
                         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         id: 'auto_' + Date.now()
