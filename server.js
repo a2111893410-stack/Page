@@ -72,7 +72,7 @@ wss.on("connection", (ws) => {
                             client.send(JSON.stringify({ type: "new", data: autoReplyPacket }));
                         }
                     });
-                }, 5000); 
+                }, 3000); 
             }
 
             // --- 脱敏推送 ---
