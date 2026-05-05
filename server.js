@@ -50,7 +50,7 @@ wss.on("connection", (ws) => {
             // --- 自动回复逻辑 ---
             // 条件：不是 admin 发的，且不在 knownUsers 列表中
             if (packet.from !== "admin" && !knownUsers.has(packet.from)) {
-                knownUsers.add(packet.from); // 标记该用户已经来过了
+                knownUsers.add(packet.from); // 标记该用户已经来过
                 
                 // 延迟 1 秒发送自动回复，体验更自然
                 setTimeout(() => {
