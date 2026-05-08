@@ -18,7 +18,7 @@ const BARK_KEY = process.env.BARK_KEY || "a7TwmrfWu7jK2ASRxkiXDB";
 const ADMIN_URL = "https://ml-theta-three.vercel.app/admin.html"; 
 let history = []; 
 
-// 【新增】用于记录哪些客户已经发过消息了（存放在内存中）
+// 【新增】用于记录哪些客户已经发过消息了（存放在内存中了）
 const knownUsers = new Set(); 
 
 wss.on("connection", (ws) => {
