@@ -21,7 +21,7 @@ let history = [];
 // 【新增】用于记录哪些客户已经发过消息了（存放在内存中了）
 const knownUsers = new Set(); 
 
-// ── 新增：拉黑名单 ──────────────────────────────────────
+// ── 新增：拉黑名 ──────────────────────────────────────
 let blacklist = new Set(JSON.parse(localStorage.getItem('wepro_blacklist') || '[]'));
 function saveBlacklist() { localStorage.setItem('wepro_blacklist', JSON.stringify([...blacklist])); }
 function isBlacklisted(uid) { return blacklist.has(String(uid).toLowerCase()); }
