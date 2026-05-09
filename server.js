@@ -21,6 +21,45 @@ let history = [];
 // 【新增】用于记录哪些客户已经发过消息了（存放在内存中了）
 const knownUsers = new Set(); 
 
+// ── 新增：拉黑名单 ──────────────────────────────────────
+let blacklist = new Set(JSON.parse(localStorage.getItem('wepro_blacklist') || '[]'));
+function saveBlacklist() { localStorage.setItem('wepro_blacklist', JSON.stringify([...blacklist])); }
+function isBlacklisted(uid) { return blacklist.has(String(uid).toLowerCase()); }
+
+function updateBanUI() {
+  const banned = activeId && isBlacklisted(activeId);
+  document.getElementById('ban-banner').classList.toggle('show', !!banned);
+  document.getElementById('ban-overlay').classList.toggle('show', !!banned);
+  ipt.disabled = !activeId || !!banned;
+}
+
+function showMoreMenu() {
+  if (!activeId) return;
+  const banned = isBlacklisted(activeId);
+  document.getElementById('sheet-user-name').textContent = getShortName(activeId);
+  const btn = document.getElementById('sheet-action-btn');
+  btn.textContent = banned ? '✅ 解除拉黑' : '🚫 拉黑该用户';
+  btn.className = 'sheet-btn ' + (banned ? 'safe' : 'danger');
+  btn.onclick = () => { closeBanModal(); banned ? doUnban() : doBan(); };
+  document.getElementById('ban-modal').classList.add('show');
+}
+
+function closeBanModal() { document.getElementById('ban-modal').classList.remove('show'); }
+
+function doBan() {
+  if (!activeId) return;
+  blacklist.add(activeId); saveBlacklist();
+  showToast('已拉黑 ' + getShortName(activeId));
+  renderSideList(); updateBanUI();
+}
+
+function doUnban() {
+  if (!activeId) return;
+  blacklist.delete(activeId); saveBlacklist();
+  showToast('已解除 ' + getShortName(activeId) + ' 的拉黑');
+  renderSideList(); updateBanUI();
+}
+
 wss.on("connection", (ws) => {
     ws.isAlive = true;
     console.log("新客户端已连接");
