@@ -57,7 +57,7 @@ wss.on("connection", (ws) => {
                     const autoReplyPacket = {
                         from: "admin",
                         to: packet.from,
-                        text: "要预约哪个",
+                        text: "稍等",
                         type: "text",
                         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         id: 'auto_' + Date.now()
