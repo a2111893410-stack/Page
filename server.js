@@ -170,6 +170,26 @@ app.get("/escrow/list/:pinHash", async (req, res) => {
   }
 });
 
+// 专门用来检查环境变量和连通性的接口
+app.get("/api/check-health", async (req, res) => {
+  const config = {
+    hasBinId: !!process.env.JSONBIN_BIN_ID,
+    hasApiKey: !!process.env.JSONBIN_API_KEY,
+    binIdPreview: process.env.JSONBIN_BIN_ID ? (process.env.JSONBIN_BIN_ID.substring(0,4) + "...") : "none"
+  };
+
+  try {
+    const db = await jsonbinGet();
+    res.json({ status: "JSONBin 连接成功!", config, dataPreview: db });
+  } catch (e) {
+    res.status(500).json({ 
+      status: "JSONBin 连接失败", 
+      reason: e.message,
+      config 
+    });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 //  原有聊天 WebSocket 服务（原样保留）
 // ═══════════════════════════════════════════════════════════
