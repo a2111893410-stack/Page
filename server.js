@@ -28,13 +28,11 @@ app.get("/", (req, res) =>
 // ═══════════════════════════════════════════════════════════
 const BIN_ID  = process.env.JSONBIN_BIN_ID;
 const API_KEY = process.env.JSONBIN_API_KEY;
-const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
-// 内存缓存，减少对 JSONBin 的请求数
 let escrowCache = null;
 
 async function jsonbinGet() {
-  if (escrowCache) return escrowCache; // 命中缓存直接返回
+  if (escrowCache) return escrowCache;
   return new Promise((resolve, reject) => {
     const options = {
       hostname: "api.jsonbin.io",
@@ -50,9 +48,7 @@ async function jsonbinGet() {
           const json = JSON.parse(body);
           escrowCache = json.record || {};
           resolve(escrowCache);
-        } catch (e) {
-          reject(e);
-        }
+        } catch (e) { reject(e); }
       });
     });
     req.on("error", reject);
@@ -61,7 +57,7 @@ async function jsonbinGet() {
 }
 
 async function jsonbinPut(data) {
-  escrowCache = data; // 同步更新缓存
+  escrowCache = data;
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
     const options = {
@@ -92,7 +88,6 @@ app.get("/escrow/:token", async (req, res) => {
     const db = await jsonbinGet();
     const order = db[token];
     if (!order) return res.status(404).json({ error: "订单不存在" });
-    // 返回时隐藏口令（仅 done 状态才返回）
     const safeOrder = { ...order };
     if (order.status !== "done") delete safeOrder.kw;
     res.json(safeOrder);
@@ -111,14 +106,9 @@ app.post("/escrow", async (req, res) => {
     const db = await jsonbinGet();
     if (db[token]) return res.status(409).json({ error: "令牌冲突，请重试" });
     db[token] = {
-      token,
-      kw,
-      price: Number(price),
-      note: note || "无备注",
-      pin, // 前端已哈希，后端直接存
-      status: "pending",
-      at: Date.now(),
-      doneAt: null
+      token, kw, price: Number(price),
+      note: note || "无备注", pin,
+      status: "pending", at: Date.now(), doneAt: null
     };
     await jsonbinPut(db);
     res.json({ ok: true, token });
@@ -170,39 +160,23 @@ app.get("/escrow/list/:pinHash", async (req, res) => {
   }
 });
 
-// 专门用来检查环境变量和连通性的接口
+// ── 健康检查 ──────────────────────────────────────────────
 app.get("/api/check-health", async (req, res) => {
   const config = {
     hasBinId: !!process.env.JSONBIN_BIN_ID,
     hasApiKey: !!process.env.JSONBIN_API_KEY,
     binIdPreview: process.env.JSONBIN_BIN_ID ? (process.env.JSONBIN_BIN_ID.substring(0,4) + "...") : "none"
   };
-
   try {
     const db = await jsonbinGet();
     res.json({ status: "JSONBin 连接成功!", config, dataPreview: db });
   } catch (e) {
-    res.status(500).json({ 
-      status: "JSONBin 连接失败", 
-      reason: e.message,
-      config 
-    });
-  }
-});
-
-// 临时清空接口：访问一次就会把云端重置
-app.get("/api/nuke-db", async (req, res) => {
-  try {
-    const { jsonbinPut } = require('./server.js'); // 确保能调用到你的推送函数
-    await jsonbinPut({}); 
-    res.send("云端数据库已彻底清空！");
-  } catch (e) {
-    res.status(500).send("清空失败: " + e.message);
+    res.status(500).json({ status: "JSONBin 连接失败", reason: e.message, config });
   }
 });
 
 // ═══════════════════════════════════════════════════════════
-//  原有聊天 WebSocket 服务（原样保留）
+//  聊天 WebSocket 服务
 // ═══════════════════════════════════════════════════════════
 const server = http.createServer(app);
 
@@ -226,17 +200,18 @@ wss.on("connection", (ws) => {
     try {
       const data = JSON.parse(raw);
       const packet = {
-        from: String(data.from).toLowerCase().trim(),
-        to:   String(data.to).toLowerCase().trim(),
-        text: data.text,
-        type: data.type || "text",
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        id:   "msg_" + Date.now() + Math.random().toString(36).substr(2, 4)
+        from:     String(data.from).toLowerCase().trim(),
+        to:       String(data.to).toLowerCase().trim(),
+        text:     data.text,
+        type:     data.type || "text",
+        location: data.location || null,   // ── 新增：透传位置字段
+        time:     new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        id:       "msg_" + Date.now() + Math.random().toString(36).substr(2, 4)
       };
 
       history.push(packet);
       if (history.length > 100) history.shift();
-      console.log(`[转发] ${packet.from} -> ${packet.to} (${packet.type})`);
+      console.log(`[转发] ${packet.from} -> ${packet.to} (${packet.type})${packet.location ? ' 📍' + packet.location : ''}`);
 
       if (packet.from !== "admin" && !knownUsers.has(packet.from)) {
         knownUsers.add(packet.from);
@@ -244,6 +219,7 @@ wss.on("connection", (ws) => {
           const autoReply = {
             from: "admin", to: packet.from,
             text: "稍等", type: "text",
+            location: null,
             time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             id: "auto_" + Date.now()
           };
