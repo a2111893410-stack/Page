@@ -190,6 +190,17 @@ app.get("/api/check-health", async (req, res) => {
   }
 });
 
+// 临时清空接口：访问一次就会把云端重置
+app.get("/api/nuke-db", async (req, res) => {
+  try {
+    const { jsonbinPut } = require('./server.js'); // 确保能调用到你的推送函数
+    await jsonbinPut({}); 
+    res.send("云端数据库已彻底清空！");
+  } catch (e) {
+    res.status(500).send("清空失败: " + e.message);
+  }
+});
+
 // ═══════════════════════════════════════════════════════════
 //  原有聊天 WebSocket 服务（原样保留）
 // ═══════════════════════════════════════════════════════════
