@@ -30,7 +30,7 @@ const BIN_ID  = process.env.JSONBIN_BIN_ID;
 const API_KEY = process.env.JSONBIN_API_KEY;
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
-// 内存缓存，减少对 JSONBin 的请求次数
+// 内存缓存，减少对 JSONBin 的请求数
 let escrowCache = null;
 
 async function jsonbinGet() {
